@@ -1,8 +1,10 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::Parser;
+use log::LevelFilter;
+use log::{info,debug,error};
 
 #[derive(Parser)]
-#[command(version,about)]
+#[command(version, about)]
 pub struct Args {
     /// Number of workers to run simultaneously
     worker_count: u32,
@@ -11,14 +13,22 @@ pub struct Args {
     /// URI of endpoint
     target_uri: String,
     /// use a single connection client shared between workers
-    #[arg(short,long,default_value_t = false)]
+    #[arg(short, long, default_value_t = false)]
     share_worker_connection: bool,
+    /// verbose logging
+    #[arg(short, long, default_value_t = false)]
+    verbose: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    println!(
+    let log_conf = simple_logger::SimpleLogger::new();
+    let _ = match args.verbose {
+        true => log_conf.with_level(LevelFilter::Debug),
+        false => log_conf.with_level(LevelFilter::Info)
+    }.init().unwrap();
+    debug!(
         "Running {} workers with {} requests per worker",
         args.worker_count, args.requests_per_worker
     );
@@ -32,14 +42,14 @@ async fn main() -> Result<()> {
             } else {
                 reqwest::Client::new()
             };
-            println!("Spawning {i}");
+            debug!("Spawning {i}");
             return tokio::spawn(async move { run_requests(client, i, request_count, url).await });
         })
         .collect();
     for handle in threads {
         match handle.await.unwrap() {
-            Ok((i, r)) => println!("Thread {i} complete after {r} requests"),
-            Err(e) => println!("{:?}", e),
+            Ok((i, r)) => info!("Thread {i} complete after {r} requests"),
+            Err(e) => error!("{:?}", e),
         };
     }
     Ok(())
@@ -51,10 +61,14 @@ async fn run_requests(
     num_count: u32,
     url: String,
 ) -> Result<(u32, u32)> {
-    println!("Starting thread {thread_index}");
+    debug!("Starting thread {thread_index}");
     for i in 0..num_count {
-        println!("Thread {thread_index} requesting {i}");
-        _ = client.post(&url).send().await?;
+        debug!("Thread {thread_index} requesting {i}");
+        _ = client
+            .post(&url)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Error in thread {}.{}: {:?}", thread_index, num_count, e))?;
     }
     Ok((thread_index, num_count))
 }
